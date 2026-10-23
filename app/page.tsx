@@ -195,6 +195,14 @@ export default function Home() {
     const channel = supabase.channel("messages-" + activeConversation)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "conversation_id=eq." + activeConversation }, (payload) => {
         const row = payload.new as ChatMessage;
+        if (row.sender_id !== currentUser.id && typeof Notification !== "undefined" && Notification.permission === "granted") {
+          const title = "New message on Hamdam";
+          const body = row.message_type === "image" ? "Sent a photo" : row.message_type === "video" ? "Sent a video" : (row.body || "You have a new message").slice(0, 120);
+          try {
+            const notice = new Notification(title, { body, tag: "hamdam-message-" + row.id });
+            notice.onclick = () => { window.focus(); setActive("Chat"); notice.close(); };
+          } catch { /* Some browsers only allow notifications from service workers. */ }
+        }
         if (row.media_path) { void supabase!.storage.from("hamdam-media").createSignedUrl(row.media_path, 3600).then(({data})=>setMessages(old=>old.some(m=>m.id===row.id)?old:[...old,{...row,mediaUrl:data?.signedUrl??null}])); } else { setMessages(old => old.some(m => m.id === row.id) ? old : [...old, row]); }
       }).subscribe();
     return () => { void supabase?.removeChannel(channel); };
