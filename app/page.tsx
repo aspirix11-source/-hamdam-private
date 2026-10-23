@@ -12,6 +12,7 @@ export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [booting, setBooting] = useState(true);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -78,9 +79,18 @@ export default function Home() {
     e.preventDefault();
     if (!supabase) return;
     setBusy(true);
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim().toLowerCase(), options: { shouldCreateUser: false, emailRedirectTo: window.location.origin } });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
     setBusy(false);
-    notify(error ? error.message : "If this email belongs to an invited account, a sign-in link is on its way.");
+    if (error) {
+      notify(error.message.includes("Invalid login credentials")
+        ? "Email or password is incorrect. Set the account password in Supabase Auth first."
+        : error.message);
+      return;
+    }
+    notify("Signed in successfully.");
   }
 
   async function sendMessage(e: FormEvent<HTMLFormElement>) {
@@ -112,7 +122,7 @@ export default function Home() {
   if (booting) return <main className="shell"><section className="card" style={{maxWidth:520,margin:"12vh auto",padding:32,textAlign:"center"}}><Heart color="var(--rose)" size={28}/><h1 className="serif">Opening your little world…</h1></section></main>;
   if (!supabase) return <main className="shell"><section className="card" style={{maxWidth:560,margin:"8vh auto",padding:28}}><h1 className="serif">A little setup is still needed.</h1><p>Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to Vercel Environment Variables, then redeploy.</p></section></main>;
 
-  if (!session) return <main className="shell"><header className="topbar"><div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor"/></div><span>hamdam<span style={{color:"var(--rose)",fontWeight:500}}>.</span></span></div></header><section className="hero"><div><div className="eyebrow">Private, by invitation</div><h1 className="serif">Your favourite <span style={{color:"var(--rose)"}}>place</span> is here.</h1><p>A little corner for the people you choose.</p></div><div className="date-pill"><LockKeyhole size={14} style={{display:"inline",verticalAlign:"middle",marginRight:7}}/>Invite-only access</div></section><section className="card" style={{maxWidth:480,margin:"0 auto",padding:28}}><div className="card-head"><div><h2 className="card-title">Sign in to Hamdam</h2><p className="subtle">Use the email address that received your invitation.</p></div><Heart color="var(--rose)"/></div><form onSubmit={requestLogin} style={{display:"grid",gap:12}}><label htmlFor="email">Email address</label><input id="email" type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" disabled={busy} type="submit" style={{width:"100%",borderRadius:14,padding:14}}>{busy?"Sending…":"Email me a sign-in link"}</button></form><p className="subtle" style={{marginTop:16,fontSize:12}}>No public sign-up. Only invited email accounts can sign in.</p></section>{toast&&<div className="toast" role="status">{toast}</div>}</main>;
+  if (!session) return <main className="shell"><header className="topbar"><div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor"/></div><span>hamdam<span style={{color:"var(--rose)",fontWeight:500}}>.</span></span></div></header><section className="hero"><div><div className="eyebrow">Private, by invitation</div><h1 className="serif">Your favourite <span style={{color:"var(--rose)"}}>place</span> is here.</h1><p>A little corner for the people you choose.</p></div><div className="date-pill"><LockKeyhole size={14} style={{display:"inline",verticalAlign:"middle",marginRight:7}}/>Invite-only access</div></section><section className="card" style={{maxWidth:480,margin:"0 auto",padding:28}}><div className="card-head"><div><h2 className="card-title">Sign in to Hamdam</h2><p className="subtle">Use the email address that received your invitation.</p></div><Heart color="var(--rose)"/></div><form onSubmit={requestLogin} style={{display:"grid",gap:12}}><label htmlFor="email">Email address</label><input id="email" type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><label htmlFor="password">Password</label><input id="password" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="Enter your password" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" disabled={busy} type="submit" style={{width:"100%",borderRadius:14,padding:14}}>{busy?"Signing in…":"Sign in"}</button></form><p className="subtle" style={{marginTop:16,fontSize:12}}>Invite-only access. Sign in with your email and password; no repeated email links.</p></section>{toast&&<div className="toast" role="status">{toast}</div>}</main>;
 
   const nav = [{label:"Home",icon:Heart},{label:"Our chat",icon:MessageCircle},{label:"Memories",icon:ImageIcon},{label:"Dates",icon:CalendarHeart}];
   const activeChat = conversations.find(c=>c.id===activeConversation);
