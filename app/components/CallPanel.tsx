@@ -51,6 +51,16 @@ export default function CallPanel({ supabase, userId, conversationId }: Props) {
     if (!channel) throw new Error("Call connection is not ready. Reload and try again.");
     const result = await channel.send({ type: "broadcast", event: "signal", payload: { ...signal, from: userId } });
     if (result === "error") throw new Error("Could not send call signal. Check Supabase Realtime settings.");
+    if (signal.type === "offer") {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetch("/api/push/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + (session?.access_token ?? "") },
+          body: JSON.stringify({ conversationId, type: "call" })
+        });
+      } catch { /* In-app call signaling still works when push is not configured. */ }
+    }
   }, [userId]);
 
   const ensurePeer = useCallback(async (stream: MediaStream) => {
