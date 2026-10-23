@@ -5,7 +5,7 @@ import { Bell, CalendarHeart, Heart, Image as ImageIcon, LockKeyhole, MessageCir
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
-type ChatMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string };
+type ChatMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string; message_type?: "text" | "image" | "video"; media_path?: string | null; media_name?: string | null; mediaUrl?: string | null };
 type Conversation = { id: string; user_a: string; user_b: string; created_at: string };
 type Memory = { id: string; conversation_id: string; created_by: string; title: string; note: string; created_at: string };
 type SpecialDate = { id: string; conversation_id: string; created_by: string; title: string; event_date: string; note: string; created_at: string };
@@ -22,6 +22,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [draft, setDraft] = useState("");
+  const [uploadingMedia, setUploadingMedia] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -56,9 +57,15 @@ export default function Home() {
 
   const loadMessages = useCallback(async (conversationId: string) => {
     if (!supabase || !conversationId) { setMessages([]); return; }
-    const { data, error } = await supabase.from("messages").select("id,conversation_id,sender_id,body,created_at").eq("conversation_id", conversationId).order("created_at", { ascending: true }).limit(200);
+    const { data, error } = await supabase.from("messages").select("id,conversation_id,sender_id,body,created_at,message_type,media_path,media_name").eq("conversation_id", conversationId).order("created_at", { ascending: true }).limit(200);
     if (error) { notify("Could not load messages: " + error.message); return; }
-    setMessages((data ?? []) as ChatMessage[]);
+    const rows = (data ?? []) as ChatMessage[];
+    const hydrated = await Promise.all(rows.map(async row => {
+      if (!row.media_path) return row;
+      const { data: signed } = await supabase!.storage.from("hamdam-media").createSignedUrl(row.media_path, 3600);
+      return { ...row, mediaUrl: signed?.signedUrl ?? null };
+    }));
+    setMessages(hydrated);
   }, [notify]);
 
   useEffect(() => {
@@ -146,7 +153,7 @@ export default function Home() {
     const channel = supabase.channel("messages-" + activeConversation)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "conversation_id=eq." + activeConversation }, (payload) => {
         const row = payload.new as ChatMessage;
-        setMessages(old => old.some(m => m.id === row.id) ? old : [...old, row]);
+        if (row.media_path) { void supabase!.storage.from("hamdam-media").createSignedUrl(row.media_path, 3600).then(({data})=>setMessages(old=>old.some(m=>m.id===row.id)?old:[...old,{...row,mediaUrl:data?.signedUrl??null}])); } else { setMessages(old => old.some(m => m.id === row.id) ? old : [...old, row]); }
       }).subscribe();
     return () => { void supabase?.removeChannel(channel); };
   }, [activeConversation, currentUser?.id]);
@@ -197,6 +204,30 @@ export default function Home() {
     await loadMessages(activeConversation);
   }
 
+  async function uploadMedia(file?: File) {
+    if (!file || !supabase || !currentUser || !activeConversation) return;
+    const allowed = ["image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm","video/quicktime"];
+    if (!allowed.includes(file.type)) { notify("Choose a JPG, PNG, WebP, GIF, MP4 or WebM file."); return; }
+    if (file.size > 50 * 1024 * 1024) { notify("Media must be 50 MB or smaller."); return; }
+    setUploadingMedia(true);
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
+      const path = activeConversation + "/" + currentUser.id + "/" + crypto.randomUUID() + "-" + safeName;
+      const { error: uploadError } = await supabase.storage.from("hamdam-media").upload(path, file, { contentType: file.type, upsert: false });
+      if (uploadError) throw uploadError;
+      const type = file.type.startsWith("image/") ? "image" : "video";
+      const { error: messageError } = await supabase.from("messages").insert({ conversation_id: activeConversation, sender_id: currentUser.id, body: file.name, message_type: type, media_path: path, media_name: file.name });
+      if (messageError) {
+        await supabase.storage.from("hamdam-media").remove([path]);
+        throw messageError;
+      }
+      await loadMessages(activeConversation);
+      notify("Media sent privately.");
+    } catch (error) {
+      notify("Media upload failed: " + (error instanceof Error ? error.message : "Please try again."));
+    } finally { setUploadingMedia(false); }
+  }
+
   async function invite(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!supabase) return;
@@ -235,8 +266,8 @@ export default function Home() {
     {active!=="Chat"&&ownerMode&&<section className="card" style={{padding:18,marginBottom:18}}><div className="card-head"><div><h2 className="card-title">Invite someone</h2><p className="subtle">Only your invited email addresses can join.</p></div><UserPlus color="var(--rose)"/></div><form onSubmit={invite} style={{display:"flex",gap:10,flexWrap:"wrap"}}><input aria-label="Invite email" type="email" required value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} placeholder="their@email.com" style={{flex:"1 1 200px",padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" disabled={busy} type="submit" style={{padding:"12px 18px",borderRadius:12}}>{busy?"Sending…":"Send invite"}</button></form></section>}
     <div className="grid-main"><section className="card chat-card" id="chat" style={{display:active==="Chat"?"flex":"none"}}>{active==="Chat"&&<div style={{padding:"16px 20px",borderBottom:"1px solid var(--line)",background:"#fffaf7"}}><h2 className="card-title" style={{marginBottom:12}}>Chats</h2>{conversations.length===0?<p className="subtle">No chats yet. An invited member will appear here.</p>:conversations.map(c=>{const peerId=c.user_a===currentUser?.id?c.user_b:c.user_a;const peer=members.find(m=>m.id===peerId);const peerMessages=messages.filter(m=>m.conversation_id===c.id);const last=peerMessages[peerMessages.length-1];return <button key={c.id} onClick={()=>{setActiveConversation(c.id);void loadMessages(c.id)}} style={{display:"flex",width:"100%",alignItems:"center",gap:12,textAlign:"left",padding:"12px 0",border:0,borderBottom:"1px solid var(--line)",background:"transparent",color:"var(--ink)"}}><span className="avatar">{(peer?.display_name??"♡").slice(0,1).toUpperCase()}</span><span style={{flex:1,minWidth:0}}><strong style={{display:"block",fontSize:13}}>{peer?.display_name??"Private chat"}</strong><span className="subtle" style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{last?.body??"Tap to open conversation"}</span></span><span className="subtle">›</span></button>})}</div>}<div className="card-head"><div className="chat-intro"><div className="couple-avatars"><span>{currentUser?.email?.slice(0,1).toUpperCase()}</span><span>♡</span></div><div><h2 className="card-title">{other?.display_name ?? "Your private chat"}</h2><div className="subtle" style={{marginTop:5}}><span className="online-dot"/>{conversations.length ? "One-to-one conversation" : "Your chat will appear after an invited member joins"}</div></div></div></div>
       {conversations.length>1&&<div style={{display:"flex",gap:8,padding:"0 18px 12px",flexWrap:"wrap"}}>{conversations.map(c=>{const id=c.user_a===currentUser?.id?c.user_b:c.user_a;const name=members.find(m=>m.id===id)?.display_name??"Private chat";return <button key={c.id} className="small-link" onClick={()=>setActiveConversation(c.id)} style={{fontWeight:activeConversation===c.id?700:400}}>{name}</button>})}</div>}
-      <div className="chat-body" aria-live="polite">{!activeConversation?<div className="day-divider">No conversations yet · invite someone to begin</div>:messages.length===0?<div className="day-divider">Say hello · your messages are private to this conversation</div>:messages.map(m=><div className={"message-row "+(m.sender_id===currentUser?.id?"mine":"")} key={m.id}>{m.sender_id!==currentUser?.id&&<div className="avatar" style={{width:28,height:28,fontSize:10,flexShrink:0}}>♡</div>}<div><div className="message">{m.body}</div><div className="msg-time" style={{textAlign:m.sender_id===currentUser?.id?"right":"left"}}>{new Date(m.created_at).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}</div></div></div>)}</div>
-      <form className="chat-compose" onSubmit={sendMessage}><input aria-label="Write a message" value={draft} onChange={e=>setDraft(e.target.value)} placeholder={activeConversation?"Write something sweet…":"Invite a member to start chatting"} maxLength={5000} disabled={!activeConversation||busy}/><button className="send-btn" aria-label="Send message" type="submit" disabled={!activeConversation||busy}><Send size={17}/></button></form></section>
+      <div className="chat-body" aria-live="polite">{!activeConversation?<div className="day-divider">No conversations yet · invite someone to begin</div>:messages.length===0?<div className="day-divider">Say hello · your messages are private to this conversation</div>:messages.map(m=><div className={"message-row "+(m.sender_id===currentUser?.id?"mine":"")} key={m.id}>{m.sender_id!==currentUser?.id&&<div className="avatar" style={{width:28,height:28,fontSize:10,flexShrink:0}}>♡</div>}<div><div className="message">{m.message_type==="image"&&m.mediaUrl?<a href={m.mediaUrl} target="_blank" rel="noreferrer"><img src={m.mediaUrl} alt={m.media_name??"Shared image"} style={{display:"block",maxWidth:"min(65vw,320px)",maxHeight:320,objectFit:"contain",borderRadius:10}}/></a>:m.message_type==="video"&&m.mediaUrl?<video src={m.mediaUrl} controls playsInline style={{display:"block",maxWidth:"min(65vw,320px)",maxHeight:320,borderRadius:10}}/>:m.body}</div><div className="msg-time" style={{textAlign:m.sender_id===currentUser?.id?"right":"left"}}>{new Date(m.created_at).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}</div></div></div>)}</div>
+      <form className="chat-compose" onSubmit={sendMessage}><label title="Attach photo or video" style={{display:"grid",placeItems:"center",minWidth:38,cursor:"pointer",color:"var(--rose)"}}><ImageIcon size={19}/><input aria-label="Attach photo or video" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" disabled={!activeConversation||uploadingMedia||busy} onChange={e=>{const file=e.target.files?.[0];void uploadMedia(file);e.currentTarget.value="";}} style={{display:"none"}}/></label><input aria-label="Write a message" value={draft} onChange={e=>setDraft(e.target.value)} placeholder={activeConversation?"Write something sweet…":"Invite a member to start chatting"} maxLength={5000} disabled={!activeConversation||busy}/><button className="send-btn" aria-label="Send message" type="submit" disabled={!activeConversation||busy||uploadingMedia}><Send size={17}/></button>{uploadingMedia&&<span className="subtle">Uploading…</span>}</form></section>
       <div className="right-stack"><section className="card" id="settings" style={{display:active==="Settings"?"block":"none"}}><div className="card-head"><div><h2 className="card-title">Settings & Privacy</h2><p className="subtle">Your private Hamdam account</p></div><LockKeyhole color="var(--rose)"/></div><div style={{padding:20,display:"grid",gap:12}}><p className="subtle">Only use Hamdam with your invited account. Keep your password private and sign out on shared devices.</p><button type="button" className="send-btn" onClick={()=>void signOut()} style={{width:"100%",padding:13}}>Sign out</button></div></section><section className="card" id="calls" style={{display:active==="Calls"?"block":"none"}}><div className="card-head"><div><h2 className="card-title">Calls</h2><p className="subtle">Voice and video calling</p></div><Bell color="var(--rose)"/></div><div style={{padding:20}}><p className="subtle">Calling is not active yet. Real-time signaling, WebRTC connection handling, microphone/camera permissions and network relay must be implemented and tested before calls can work.</p></div></section><section className="card" id="memories" style={{display:active==="Memories"?"block":"none"}}><div className="card-head"><div><h2 className="card-title">Little time capsules</h2><p className="subtle" style={{margin:"5px 0 0"}}>Shared memories saved to your private chat</p></div><ImageIcon size={20} color="var(--rose)"/></div>
       {!activeConversation?<p className="subtle">Invite someone to unlock shared memories.</p>:<form onSubmit={saveMemory} style={{display:"grid",gap:9,marginBottom:16}}><input aria-label="Memory title" required maxLength={120} value={memoryTitle} onChange={e=>setMemoryTitle(e.target.value)} placeholder="Memory title" style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><textarea aria-label="Memory note" maxLength={2000} value={memoryNote} onChange={e=>setMemoryNote(e.target.value)} placeholder="What do you want to remember?" rows={3} style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" type="submit" disabled={busy} style={{padding:12,borderRadius:12}}>Save memory</button></form>}
       <div style={{display:"grid",gap:10}}>{memories.length===0?<p className="subtle">No saved memories yet. Add your first one above.</p>:memories.map(m=><article key={m.id} className="memory-feature" style={{padding:16}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"start"}}><div><h3 style={{margin:"0 0 6px"}}>{m.title}</h3>{m.note&&<p style={{margin:0,whiteSpace:"pre-wrap"}}>{m.note}</p>}<small className="subtle">{new Date(m.created_at).toLocaleDateString()}</small></div><button className="small-link" aria-label="Delete memory" onClick={()=>void deleteMemory(m.id)}><Trash2 size={16}/></button></div></article>)}</div></section>
