@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
-import { cookies } from "next/headers";
 import { randomUUID } from "crypto";
 
 export async function POST(request: Request) {
@@ -12,18 +10,13 @@ export async function POST(request: Request) {
   if (!url || !anon || !serviceKey || !ownerEmail) {
     return NextResponse.json({ error: "Server setup incomplete. Add Supabase URL, publishable key, service role key, and owner email in Vercel." }, { status: 500 });
   }
-  const cookieStore = await cookies();
-  const authClient = createServerClient(url, anon, {
-    cookies: {
-      getAll: () => cookieStore.getAll(),
-      setAll: (items: { name: string; value: string; options?: any }[]) => {
-        try {
-          items.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
-        } catch {}
-      },
-    },
-  });
-  const { data: { user }, error: authError } = await authClient.auth.getUser();
+  const authHeader = request.headers.get("authorization") ?? "";
+  const accessToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!accessToken) {
+    return NextResponse.json({ error: "Sign in again before sending an invitation." }, { status: 401 });
+  }
+  const authClient = createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data: { user }, error: authError } = await authClient.auth.getUser(accessToken);
   if (authError || !user || user.email?.toLowerCase() !== ownerEmail) {
     return NextResponse.json({ error: "Only the configured Hamdam owner can invite members." }, { status: 403 });
   }
