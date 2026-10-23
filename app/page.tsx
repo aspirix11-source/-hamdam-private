@@ -174,9 +174,16 @@ export default function Home() {
 
   async function invite(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!supabase) return;
     setBusy(true);
     try {
-      const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: inviteEmail }) });
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession?.access_token) {
+        notify("Your session expired. Sign in again.");
+        setBusy(false);
+        return;
+      }
+      const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + currentSession.access_token }, body: JSON.stringify({ email: inviteEmail }) });
       const result = await response.json();
       notify(response.ok ? "Invitation sent to " + inviteEmail : (result.error ?? "Could not send invitation."));
       if (response.ok) setInviteEmail("");
