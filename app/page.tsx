@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Bell, CalendarHeart, Heart, Image as ImageIcon, LockKeyhole, LogOut, MessageCircle, Send, Sparkles, UserPlus } from "lucide-react";
+import { Bell, CalendarHeart, Heart, Image as ImageIcon, LockKeyhole, MessageCircle, Send, Sparkles, UserPlus, Trash2 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 type ChatMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string };
 type Conversation = { id: string; user_a: string; user_b: string; created_at: string };
+type Memory = { id: string; conversation_id: string; created_by: string; title: string; note: string; created_at: string };
+type SpecialDate = { id: string; conversation_id: string; created_by: string; title: string; event_date: string; note: string; created_at: string };
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
@@ -24,6 +26,13 @@ export default function Home() {
   const [ownerMode, setOwnerMode] = useState(false);
   const [active, setActive] = useState("Home");
   const [all, setAll] = useState(false);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [specialDates, setSpecialDates] = useState<SpecialDate[]>([]);
+  const [memoryTitle, setMemoryTitle] = useState("");
+  const [memoryNote, setMemoryNote] = useState("");
+  const [dateTitle, setDateTitle] = useState("");
+  const [dateValue, setDateValue] = useState("");
+  const [dateNote, setDateNote] = useState("");
 
   const notify = useCallback((s: string) => { setToast(s); window.setTimeout(() => setToast(""), 3200); }, []);
   const currentUser = session?.user;
@@ -64,6 +73,64 @@ export default function Home() {
   }, [currentUser?.id, loadConversations]);
 
   useEffect(() => { void loadMessages(activeConversation); }, [activeConversation, loadMessages]);
+
+  const loadSharedItems = useCallback(async (conversationId: string) => {
+    if (!supabase || !conversationId) { setMemories([]); setSpecialDates([]); return; }
+    const [memoryResult, dateResult] = await Promise.all([
+      supabase.from("memories").select("id,conversation_id,created_by,title,note,created_at").eq("conversation_id", conversationId).order("created_at", { ascending: false }),
+      supabase.from("special_dates").select("id,conversation_id,created_by,title,event_date,note,created_at").eq("conversation_id", conversationId).order("event_date", { ascending: true }),
+    ]);
+    if (memoryResult.error) notify("Memories: " + memoryResult.error.message);
+    else setMemories((memoryResult.data ?? []) as Memory[]);
+    if (dateResult.error) notify("Dates: " + dateResult.error.message);
+    else setSpecialDates((dateResult.data ?? []) as SpecialDate[]);
+  }, [notify]);
+
+  useEffect(() => { void loadSharedItems(activeConversation); }, [activeConversation, loadSharedItems]);
+
+  async function saveMemory(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!supabase || !currentUser || !activeConversation || !memoryTitle.trim()) return;
+    setBusy(true);
+    const { error } = await supabase.from("memories").insert({
+      conversation_id: activeConversation, created_by: currentUser.id,
+      title: memoryTitle.trim(), note: memoryNote.trim()
+    });
+    setBusy(false);
+    if (error) { notify("Could not save memory: " + error.message); return; }
+    setMemoryTitle(""); setMemoryNote("");
+    await loadSharedItems(activeConversation);
+    notify("Memory saved for both of you.");
+  }
+
+  async function saveSpecialDate(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!supabase || !currentUser || !activeConversation || !dateTitle.trim() || !dateValue) return;
+    setBusy(true);
+    const { error } = await supabase.from("special_dates").insert({
+      conversation_id: activeConversation, created_by: currentUser.id,
+      title: dateTitle.trim(), event_date: dateValue, note: dateNote.trim()
+    });
+    setBusy(false);
+    if (error) { notify("Could not save date: " + error.message); return; }
+    setDateTitle(""); setDateValue(""); setDateNote("");
+    await loadSharedItems(activeConversation);
+    notify("Special date saved.");
+  }
+
+  async function deleteMemory(id: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("memories").delete().eq("id", id);
+    if (error) { notify("Could not delete memory: " + error.message); return; }
+    await loadSharedItems(activeConversation);
+  }
+
+  async function deleteSpecialDate(id: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("special_dates").delete().eq("id", id);
+    if (error) { notify("Could not delete date: " + error.message); return; }
+    await loadSharedItems(activeConversation);
+  }
 
   useEffect(() => {
     if (!supabase || !activeConversation || !currentUser) return;
@@ -136,8 +203,12 @@ export default function Home() {
       {conversations.length>1&&<div style={{display:"flex",gap:8,padding:"0 18px 12px",flexWrap:"wrap"}}>{conversations.map(c=>{const id=c.user_a===currentUser?.id?c.user_b:c.user_a;const name=members.find(m=>m.id===id)?.display_name??"Private chat";return <button key={c.id} className="small-link" onClick={()=>setActiveConversation(c.id)} style={{fontWeight:activeConversation===c.id?700:400}}>{name}</button>})}</div>}
       <div className="chat-body" aria-live="polite">{!activeConversation?<div className="day-divider">No conversations yet · invite someone to begin</div>:messages.length===0?<div className="day-divider">Say hello · your messages are private to this conversation</div>:messages.map(m=><div className={"message-row "+(m.sender_id===currentUser?.id?"mine":"")} key={m.id}>{m.sender_id!==currentUser?.id&&<div className="avatar" style={{width:28,height:28,fontSize:10,flexShrink:0}}>♡</div>}<div><div className="message">{m.body}</div><div className="msg-time" style={{textAlign:m.sender_id===currentUser?.id?"right":"left"}}>{new Date(m.created_at).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}</div></div></div>)}</div>
       <form className="chat-compose" onSubmit={sendMessage}><input aria-label="Write a message" value={draft} onChange={e=>setDraft(e.target.value)} placeholder={activeConversation?"Write something sweet…":"Invite a member to start chatting"} maxLength={5000} disabled={!activeConversation||busy}/><button className="send-btn" aria-label="Send message" type="submit" disabled={!activeConversation||busy}><Send size={17}/></button></form></section>
-      <div className="right-stack"><section className="card" id="memories"><div className="card-head"><div><h2 className="card-title">Little time capsules</h2><p className="subtle" style={{margin:"5px 0 0"}}>The moments we want to keep</p></div><button className="small-link" onClick={()=>setAll(v=>!v)}>{all?"Show less":"See all"}</button></div><div className="memory-feature" style={{padding:20}}><div className="eyebrow">Private memories</div><h3>{all?"Photo memories are the next step.":"A place for your moments."}</h3><p>Secure photo storage will be added after chat access is working.</p></div><div className="memory-grid"><div className="memory-tile"><span>☁️</span><p>Cloud watching</p><small>Memory ideas</small></div><div className="memory-tile"><span>🌙</span><p>Late night talks</p><small>Memory ideas</small></div><div className="memory-tile"><span>🍰</span><p>Sweet little things</p><small>Memory ideas</small></div></div></section>
-      <section className="card" id="dates"><div className="card-head"><div><h2 className="card-title">Dates to keep close</h2><p className="subtle" style={{margin:"5px 0 0"}}>Little days that mean a lot</p></div><CalendarHeart size={20} color="var(--rose)"/></div><div className="date-list"><p className="subtle">Shared special dates will be connected next.</p></div></section><section style={{display:"flex",alignItems:"center",gap:10,padding:"3px 5px",color:"var(--muted)",fontSize:11}}><LockKeyhole size={15} color="var(--rose)"/><span>Invite-only. Messages are visible to conversation participants.</span></section></div></div>
+      <div className="right-stack"><section className="card" id="memories"><div className="card-head"><div><h2 className="card-title">Little time capsules</h2><p className="subtle" style={{margin:"5px 0 0"}}>Shared memories saved to your private chat</p></div><ImageIcon size={20} color="var(--rose)"/></div>
+      {!activeConversation?<p className="subtle">Invite someone to unlock shared memories.</p>:<form onSubmit={saveMemory} style={{display:"grid",gap:9,marginBottom:16}}><input aria-label="Memory title" required maxLength={120} value={memoryTitle} onChange={e=>setMemoryTitle(e.target.value)} placeholder="Memory title" style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><textarea aria-label="Memory note" maxLength={2000} value={memoryNote} onChange={e=>setMemoryNote(e.target.value)} placeholder="What do you want to remember?" rows={3} style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" type="submit" disabled={busy} style={{padding:12,borderRadius:12}}>Save memory</button></form>}
+      <div style={{display:"grid",gap:10}}>{memories.length===0?<p className="subtle">No saved memories yet. Add your first one above.</p>:memories.map(m=><article key={m.id} className="memory-feature" style={{padding:16}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"start"}}><div><h3 style={{margin:"0 0 6px"}}>{m.title}</h3>{m.note&&<p style={{margin:0,whiteSpace:"pre-wrap"}}>{m.note}</p>}<small className="subtle">{new Date(m.created_at).toLocaleDateString()}</small></div><button className="small-link" aria-label="Delete memory" onClick={()=>void deleteMemory(m.id)}><Trash2 size={16}/></button></div></article>)}</div></section>
+      <section className="card" id="dates"><div className="card-head"><div><h2 className="card-title">Dates to keep close</h2><p className="subtle" style={{margin:"5px 0 0"}}>Shared anniversaries and important days</p></div><CalendarHeart size={20} color="var(--rose)"/></div>
+      {!activeConversation?<p className="subtle">Invite someone to add shared dates.</p>:<form onSubmit={saveSpecialDate} style={{display:"grid",gap:9,marginBottom:16}}><input aria-label="Date title" required maxLength={120} value={dateTitle} onChange={e=>setDateTitle(e.target.value)} placeholder="What is the day?" style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><input aria-label="Special date" type="date" required value={dateValue} onChange={e=>setDateValue(e.target.value)} style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><input aria-label="Date note" maxLength={500} value={dateNote} onChange={e=>setDateNote(e.target.value)} placeholder="A little note (optional)" style={{padding:12,borderRadius:12,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" type="submit" disabled={busy} style={{padding:12,borderRadius:12}}>Save special date</button></form>}
+      <div className="date-list">{specialDates.length===0?<p className="subtle">No dates saved yet.</p>:specialDates.map(d=><article key={d.id} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"12px 0",borderBottom:"1px solid #f0e2df"}}><div><strong>{d.title}</strong><p className="subtle" style={{margin:"4px 0"}}>{new Date(d.event_date+"T12:00:00").toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"})}</p>{d.note&&<p style={{margin:0}}>{d.note}</p>}</div><button className="small-link" aria-label="Delete special date" onClick={()=>void deleteSpecialDate(d.id)}><Trash2 size={16}/></button></article>)}</div></section><section style={{display:"flex",alignItems:"center",gap:10,padding:"3px 5px",color:"var(--muted)",fontSize:11}}><LockKeyhole size={15} color="var(--rose)"/><span>Invite-only. Messages are visible to conversation participants.</span></section></div></div>
     <footer className="footer-note">Made of little moments and a lot of love <span style={{color:"var(--rose)"}}>♡</span></footer>
     <nav className="nav-mobile" aria-label="Main navigation">{nav.map(({label,icon:Icon})=><button key={label} className={active===label?"active":""} onClick={()=>{setActive(label);const target=label==="Our chat"?"chat":label==="Memories"?"memories":label==="Dates"?"dates":"";if(target)document.getElementById(target)?.scrollIntoView({behavior:"smooth",block:"start"});else window.scrollTo({top:0,behavior:"smooth"})}}><Icon size={19}/><span>{label}</span></button>)}</nav>
     {toast&&<div className="toast" role="status">{toast}</div>}
