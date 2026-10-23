@@ -71,16 +71,57 @@ export default function Home() {
 
   useEffect(() => {
     if (!supabase) { setBooting(false); return; }
-    // Supabase invitation and password-recovery links return tokens in the URL hash.
-    const hash = typeof window !== "undefined" ? window.location.hash : "";
-    if (hash.includes("type=invite") || hash.includes("type=recovery")) setNeedsPasswordSetup(true);
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setBooting(false); });
-    const { data: listener } = supabase.auth.onAuthStateChange((event, next) => {
+    let alive = true;
+    const auth = supabase.auth;
+    const boot = async () => {
+      try {
+        const url = new URL(window.location.href);
+        const hash = new URLSearchParams(url.hash.replace(/^#/, ""));
+        const type = hash.get("type") || url.searchParams.get("type");
+        const code = url.searchParams.get("code");
+        if (type === "invite" || type === "recovery") setNeedsPasswordSetup(true);
+        if (code) {
+          const { data, error } = await auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          if (alive) {
+            setSession(data.session);
+            setNeedsPasswordSetup(type === "invite" || type === "recovery");
+          }
+          url.searchParams.delete("code");
+          window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+          return;
+        }
+        const accessToken = hash.get("access_token");
+        const refreshToken = hash.get("refresh_token");
+        if (accessToken && refreshToken) {
+          const { data, error } = await auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          if (error) throw error;
+          if (alive) {
+            setSession(data.session);
+            setNeedsPasswordSetup(type === "recovery" || type === "invite");
+          }
+          window.history.replaceState({}, document.title, url.pathname + url.search);
+          return;
+        }
+        const { data, error } = await auth.getSession();
+        if (error) throw error;
+        if (alive) setSession(data.session);
+      } catch {
+        if (alive) {
+          setNeedsPasswordSetup(false);
+          notify("This reset/invitation link could not be verified. Request a fresh email.");
+        }
+      } finally {
+        if (alive) setBooting(false);
+      }
+    };
+    void boot();
+    const { data: listener } = auth.onAuthStateChange((event, next) => {
       if (event === "PASSWORD_RECOVERY") setNeedsPasswordSetup(true);
-      setSession(next); setBooting(false);
+      if (alive) { setSession(next); setBooting(false); }
     });
-    return () => listener.subscription.unsubscribe();
-  }, []);
+    return () => { alive = false; listener.subscription.unsubscribe(); };
+  }, [notify]);
 
   useEffect(() => {
     if (currentUser) {
