@@ -38,6 +38,14 @@ export default function CallPanel({ supabase, userId, conversationId }: Props) {
     setCameraOff(false);
   }, []);
 
+  useEffect(() => {
+    if (!inCall || !streamRef.current) return;
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = streamRef.current;
+      void localVideoRef.current.play().catch(() => {});
+    }
+  }, [inCall]);
+
   const sendSignal = useCallback(async (signal: Omit<Signal, "from">) => {
     const channel = channelRef.current;
     if (!channel) throw new Error("Call connection is not ready. Reload and try again.");
