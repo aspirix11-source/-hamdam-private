@@ -32,7 +32,9 @@ export async function POST(request: Request) {
   }).select("id").single();
   if (insertError) return NextResponse.json({ error: "Could not create invitation record: " + insertError.message }, { status: 400 });
 
-  const { error } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo: new URL("/", request.url).toString() });
+  // Always return invite links to the public production domain, never a protected preview deployment.
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://hamdam-private.vercel.app").replace(/\\/$/, "");
+  const { error } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo: siteUrl + "/" });
   if (error) {
     await admin.from("invitations").delete().eq("id", pending.id);
     return NextResponse.json({ error: error.message }, { status: 400 });
