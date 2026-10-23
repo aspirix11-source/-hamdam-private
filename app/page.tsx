@@ -15,6 +15,8 @@ export default function Home() {
   const [booting, setBooting] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -60,8 +62,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!supabase) { setBooting(false); return; }
+    // Supabase invitation and password-recovery links return tokens in the URL hash.
+    const hash = typeof window !== "undefined" ? window.location.hash : "";
+    if (hash.includes("type=invite") || hash.includes("type=recovery")) setNeedsPasswordSetup(true);
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setBooting(false); });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => { setSession(next); setBooting(false); });
+    const { data: listener } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === "PASSWORD_RECOVERY") setNeedsPasswordSetup(true);
+      setSession(next); setBooting(false);
+    });
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -142,6 +150,22 @@ export default function Home() {
     return () => { void supabase?.removeChannel(channel); };
   }, [activeConversation, currentUser?.id]);
 
+  async function setAccountPassword(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!supabase) return;
+    if (password.length < 8) { notify("Use at least 8 characters for your password."); return; }
+    if (password !== confirmPassword) { notify("The passwords do not match."); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password });
+    setBusy(false);
+    if (error) { notify("Could not set password: " + error.message); return; }
+    setPassword(""); setConfirmPassword(""); setNeedsPasswordSetup(false);
+    window.history.replaceState({}, document.title, window.location.pathname);
+    notify("Password set. You can now sign in with email and password.");
+    await supabase.auth.signOut();
+    setSession(null);
+  }
+
   async function requestLogin(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!supabase) return;
@@ -195,6 +219,8 @@ export default function Home() {
 
   if (booting) return <main className="shell"><section className="card" style={{maxWidth:520,margin:"12vh auto",padding:32,textAlign:"center"}}><Heart color="var(--rose)" size={28}/><h1 className="serif">Opening your little world…</h1></section></main>;
   if (!supabase) return <main className="shell"><section className="card" style={{maxWidth:560,margin:"8vh auto",padding:28}}><h1 className="serif">A little setup is still needed.</h1><p>Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to Vercel Environment Variables, then redeploy.</p></section></main>;
+
+  if (needsPasswordSetup) return <main className="shell"><header className="topbar"><div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor"/></div><span>hamdam<span style={{color:"var(--rose)",fontWeight:500}}>.</span></span></div></header><section className="card" style={{maxWidth:480,margin:"8vh auto",padding:28}}><div className="card-head"><div><h2 className="card-title">Set your Hamdam password</h2><p className="subtle">Choose a password to use whenever you sign in.</p></div><LockKeyhole color="var(--rose)"/></div><form onSubmit={setAccountPassword} style={{display:"grid",gap:12}}><label htmlFor="new-password">New password</label><input id="new-password" type="password" autoComplete="new-password" minLength={8} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><label htmlFor="confirm-password">Confirm password</label><input id="confirm-password" type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Enter it again" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" disabled={busy} type="submit" style={{width:"100%",borderRadius:14,padding:14}}>{busy?"Saving password…":"Set password"}</button></form>{toast&&<div className="toast" role="status">{toast}</div>}</section></main>;
 
   if (!session) return <main className="shell"><header className="topbar"><div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor"/></div><span>hamdam<span style={{color:"var(--rose)",fontWeight:500}}>.</span></span></div></header><section className="hero"><div><div className="eyebrow">Private, by invitation</div><h1 className="serif">Your favourite <span style={{color:"var(--rose)"}}>place</span> is here.</h1><p>A little corner for the people you choose.</p></div><div className="date-pill"><LockKeyhole size={14} style={{display:"inline",verticalAlign:"middle",marginRight:7}}/>Invite-only access</div></section><section className="card" style={{maxWidth:480,margin:"0 auto",padding:28}}><div className="card-head"><div><h2 className="card-title">Sign in to Hamdam</h2><p className="subtle">Use the email address that received your invitation.</p></div><Heart color="var(--rose)"/></div><form onSubmit={requestLogin} style={{display:"grid",gap:12}}><label htmlFor="email">Email address</label><input id="email" type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><label htmlFor="password">Password</label><input id="password" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="Enter your password" style={{padding:14,borderRadius:14,border:"1px solid #e7d7d4",background:"#fffaf7",color:"#493a3c"}}/><button className="send-btn" disabled={busy} type="submit" style={{width:"100%",borderRadius:14,padding:14}}>{busy?"Signing in…":"Sign in"}</button></form><p className="subtle" style={{marginTop:16,fontSize:12}}>Invite-only access. Sign in with your email and password; no repeated email links.</p></section>{toast&&<div className="toast" role="status">{toast}</div>}</main>;
 
