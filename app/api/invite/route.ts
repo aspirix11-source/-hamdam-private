@@ -28,6 +28,12 @@ export async function POST(request: Request) {
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
+  // Remove any stale invitation rows for this address so the owner can invite it again
+  // after removing/deleting a previous member. The Auth account itself must be deleted separately
+  // before Supabase can send a fresh invite to an address that already has an account.
+  const { error: staleInviteError } = await admin.from("invitations").delete().ilike("email", email).eq("invited_by", user.id);
+  if (staleInviteError) return NextResponse.json({ error: "Could not clear the previous invitation: " + staleInviteError.message }, { status: 500 });
+
   // Invitation stays pending until the owner explicitly approves it in the app.
   // The database trigger only creates the private conversation after accepted_at is set.
   const { data: invitation, error: insertError } = await admin.from("invitations").insert({
