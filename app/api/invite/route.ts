@@ -28,14 +28,13 @@ export async function POST(request: Request) {
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
-  // Invited members are allowed to join by accepting the email and setting their own password.
-  // Mark the invitation as accepted before creating the Auth user so the database trigger can
-  // create the one-to-one conversation immediately; no separate owner approval step is needed.
+  // Invitation stays pending until the owner explicitly approves it in the app.
+  // The database trigger only creates the private conversation after accepted_at is set.
   const { data: invitation, error: insertError } = await admin.from("invitations").insert({
     email,
     invited_by: user.id,
     token_hash: randomUUID(),
-    accepted_at: new Date().toISOString(),
+    accepted_at: null,
     expires_at: new Date(Date.now() + 7 * 86400000).toISOString()
   }).select("id").single();
   if (insertError) return NextResponse.json({ error: "Could not create invitation record: " + insertError.message }, { status: 400 });
