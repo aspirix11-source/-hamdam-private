@@ -81,7 +81,24 @@ export default function Home() {
         const hash = new URLSearchParams(url.hash.replace(/^#/, ""));
         const type = hash.get("type") || url.searchParams.get("type");
         const code = url.searchParams.get("code");
+        const tokenHash = url.searchParams.get("token_hash");
         if (type === "invite" || type === "recovery") setNeedsPasswordSetup(true);
+        // Supabase email templates may redirect with token_hash instead of PKCE code/hash tokens.
+        if (tokenHash && (type === "invite" || type === "recovery" || type === "email")) {
+          const { data, error } = await auth.verifyOtp({
+            token_hash: tokenHash,
+            type: type as "invite" | "recovery" | "email",
+          });
+          if (error) throw error;
+          if (alive) {
+            setSession(data.session);
+            setNeedsPasswordSetup(type === "invite" || type === "recovery");
+          }
+          url.searchParams.delete("token_hash");
+          url.searchParams.delete("type");
+          window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+          return;
+        }
         if (code) {
           const { data, error } = await auth.exchangeCodeForSession(code);
           if (error) throw error;
