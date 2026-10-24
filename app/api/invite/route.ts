@@ -27,18 +27,25 @@ export async function POST(request: Request) {
   if (email === ownerEmail) return NextResponse.json({ error: "You are already the owner." }, { status: 400 });
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data: pending, error: insertError } = await admin.from("invitations").insert({
-    email, invited_by: user.id, token_hash: randomUUID(), expires_at: new Date(Date.now() + 7 * 86400000).toISOString()
+
+  // Invited members are allowed to join by accepting the email and setting their own password.
+  // Mark the invitation as accepted before creating the Auth user so the database trigger can
+  // create the one-to-one conversation immediately; no separate owner approval step is needed.
+  const { data: invitation, error: insertError } = await admin.from("invitations").insert({
+    email,
+    invited_by: user.id,
+    token_hash: randomUUID(),
+    accepted_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 7 * 86400000).toISOString()
   }).select("id").single();
   if (insertError) return NextResponse.json({ error: "Could not create invitation record: " + insertError.message }, { status: 400 });
 
-  // Always return invite links to the public production domain, never a protected preview deployment.
   const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://hamdam-private.vercel.app";
   const siteUrl = configuredSiteUrl.endsWith("/") ? configuredSiteUrl.slice(0, -1) : configuredSiteUrl;
   const { error } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo: siteUrl + "/" });
   if (error) {
-    await admin.from("invitations").delete().eq("id", pending.id);
+    await admin.from("invitations").delete().eq("id", invitation.id);
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
-  return NextResponse.json({ ok: true, message: "Invitation email sent. The private chat will be created when the invited account is provisioned." });
+  return NextResponse.json({ ok: true, message: "Invitation email sent. The recipient can set a password and sign in." });
 }
