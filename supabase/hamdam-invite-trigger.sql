@@ -24,6 +24,7 @@ begin
     from public.invitations i
    where lower(i.email) = lower(coalesce(new.email, ''))
      and i.expires_at > now()
+     and i.accepted_at is not null
    order by i.created_at desc
    limit 1;
 
