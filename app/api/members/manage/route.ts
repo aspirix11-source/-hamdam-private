@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     invitations: (invites.data ?? []).filter((i: any) => new Date(i.expires_at).getTime() > Date.now()).map((i: any) => ({ ...i, status: i.accepted_at ? "approved" : "pending" })),
     members: users.data.users.filter(u => u.email?.toLowerCase() !== result.ownerEmail).map(u => ({
-      id: u.id, email: u.email, banned: !!u.banned_until && new Date(u.banned_until).getTime() > Date.now()
+      id: u.id, email: u.email, banned: !!(u as typeof u & { banned_until?: string | null }).banned_until && new Date((u as typeof u & { banned_until?: string | null }).banned_until!).getTime() > Date.now()
     }))
   });
 }
