@@ -64,9 +64,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, message: member ? "Request accepted. Access approved." : "Invitation approved. Access will activate after the invited person creates their account." });
   }
   if (body?.action === "reject_invitation" && typeof body.id === "string") {
-    const { error } = await result.admin.from("invitations").delete().eq("id", body.id).eq("invited_by", result.ownerId);
+    const { data: invite, error: lookupError } = await result.admin.from("invitations")
+      .select("id,email").eq("id", body.id).eq("invited_by", result.ownerId).maybeSingle();
+    if (lookupError || !invite) return NextResponse.json({ error: "Invitation not found." }, { status: 404 });
+
+    // If the recipient already created an Auth account, disable its sign-in before removing the invite.
+    const { data: users, error: usersError } = await result.admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (usersError) return NextResponse.json({ error: "Could not check invited account: " + usersError.message }, { status: 500 });
+    const member = users.users.find(u => u.email?.toLowerCase() === invite.email.toLowerCase());
+    if (member && member.id !== result.ownerId) {
+      const { error: banError } = await result.admin.auth.admin.updateUserById(member.id, { ban_duration: "876000h" });
+      if (banError) return NextResponse.json({ error: "Could not block rejected account: " + banError.message }, { status: 500 });
+    }
+    const { error } = await result.admin.from("invitations").delete().eq("id", invite.id).eq("invited_by", result.ownerId);
     if (error) return NextResponse.json({ error: "Could not remove invitation: " + error.message }, { status: 500 });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, message: "Invitation rejected and any existing account blocked." });
   }
   if (body?.action === "revoke_member" && typeof body.id === "string") {
     const { data: target, error: lookupError } = await result.admin.auth.admin.getUserById(body.id);
