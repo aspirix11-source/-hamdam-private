@@ -28,13 +28,13 @@ export async function GET(request: Request) {
   const result = await clients(request);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.status });
   const [invites, users] = await Promise.all([
-    result.admin.from("invitations").select("id,email,expires_at,invited_by").eq("invited_by", result.ownerId).order("expires_at", { ascending: false }).limit(50),
+    result.admin.from("invitations").select("id,email,expires_at,invited_by,accepted_at").eq("invited_by", result.ownerId).order("expires_at", { ascending: false }).limit(50),
     result.admin.auth.admin.listUsers({ page: 1, perPage: 100 })
   ]);
   if (invites.error) return NextResponse.json({ error: "Could not load invitations: " + invites.error.message }, { status: 500 });
   if (users.error) return NextResponse.json({ error: "Could not load members: " + users.error.message }, { status: 500 });
   return NextResponse.json({
-    invitations: (invites.data ?? []).filter((i: any) => new Date(i.expires_at).getTime() > Date.now()),
+    invitations: (invites.data ?? []).filter((i: any) => new Date(i.expires_at).getTime() > Date.now()).map((i: any) => ({ ...i, status: i.accepted_at ? "approved" : "pending" })),
     members: users.data.users.filter(u => u.email?.toLowerCase() !== result.ownerEmail).map(u => ({
       id: u.id, email: u.email, banned: !!u.banned_until && new Date(u.banned_until).getTime() > Date.now()
     }))
@@ -45,6 +45,24 @@ export async function POST(request: Request) {
   const result = await clients(request);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.status });
   const body = await request.json().catch(() => null);
+  if (body?.action === "approve_invitation" && typeof body.id === "string") {
+    const { data: invite, error: inviteError } = await result.admin.from("invitations")
+      .select("id,email,invited_by,expires_at,accepted_at").eq("id", body.id).eq("invited_by", result.ownerId).maybeSingle();
+    if (inviteError || !invite) return NextResponse.json({ error: "Invitation not found." }, { status: 404 });
+    if (new Date(invite.expires_at).getTime() <= Date.now()) return NextResponse.json({ error: "This invitation has expired. Send a new invite." }, { status: 400 });
+    const { error: approveError } = await result.admin.from("invitations").update({ accepted_at: invite.accepted_at ?? new Date().toISOString() }).eq("id", invite.id);
+    if (approveError) return NextResponse.json({ error: "Could not approve invitation: " + approveError.message }, { status: 500 });
+    const { data: users, error: usersError } = await result.admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (usersError) return NextResponse.json({ error: "Invitation approved, but member lookup failed: " + usersError.message }, { status: 500 });
+    const member = users.users.find(u => u.email?.toLowerCase() === invite.email.toLowerCase());
+    if (member && member.id !== result.ownerId) {
+      const left = member.id < result.ownerId ? member.id : result.ownerId;
+      const right = member.id < result.ownerId ? result.ownerId : member.id;
+      const { error: convoError } = await result.admin.from("conversations").upsert({ user_a: left, user_b: right }, { onConflict: "user_a,user_b", ignoreDuplicates: true });
+      if (convoError) return NextResponse.json({ error: "Approved, but chat setup failed: " + convoError.message }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, message: member ? "Request accepted. Access approved." : "Invitation approved. Access will activate after the invited person creates their account." });
+  }
   if (body?.action === "reject_invitation" && typeof body.id === "string") {
     const { error } = await result.admin.from("invitations").delete().eq("id", body.id).eq("invited_by", result.ownerId);
     if (error) return NextResponse.json({ error: "Could not remove invitation: " + error.message }, { status: 500 });
