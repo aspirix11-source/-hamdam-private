@@ -87,5 +87,20 @@ export async function POST(request: Request) {
     if (error) return NextResponse.json({ error: "Could not restore access: " + error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
+  if (body?.action === "delete_member" && typeof body.id === "string") {
+    const { data: target, error: lookupError } = await result.admin.auth.admin.getUserById(body.id);
+    if (lookupError || !target.user) return NextResponse.json({ error: "Member not found." }, { status: 404 });
+    if (target.user.id === result.ownerId || target.user.email?.toLowerCase() === result.ownerEmail) {
+      return NextResponse.json({ error: "The owner account cannot be deleted." }, { status: 400 });
+    }
+    const email = target.user.email?.toLowerCase();
+    const { error: deleteError } = await result.admin.auth.admin.deleteUser(body.id);
+    if (deleteError) return NextResponse.json({ error: "Could not delete account: " + deleteError.message }, { status: 500 });
+    if (email) {
+      const { error: inviteDeleteError } = await result.admin.from("invitations").delete().eq("email", email).eq("invited_by", result.ownerId);
+      if (inviteDeleteError) return NextResponse.json({ error: "Account deleted, but its invitation record could not be removed: " + inviteDeleteError.message }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, message: "Account permanently deleted. Related database records depend on your configured foreign-key rules." });
+  }
   return NextResponse.json({ error: "Invalid action." }, { status: 400 });
 }
